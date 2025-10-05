@@ -22,6 +22,7 @@
 package main
 
 import (
+	_ "github.com/apache/answer-plugins/connector-passkey"
 	answercmd "github.com/apache/answer/cmd"
 )
 

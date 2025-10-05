@@ -46,7 +46,8 @@
     "react-router-dom": "^7.0.2",
     "semver": "^7.3.8",
     "swr": "^1.3.0",
-    "zustand": "^5.0.2"
+    "zustand": "^5.0.2",
+    "passkey-connector": "workspace:*"
   },
   "devDependencies": {
     "@commitlint/cli": "^17.0.3",
