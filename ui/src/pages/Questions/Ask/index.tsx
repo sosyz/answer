@@ -267,10 +267,10 @@ const Ask = () => {
     }
   };
   const handleContentChange = (value: string) => {
-    setFormData({
-      ...formData,
+    setFormData((prev) => ({
+      ...prev,
       content: { value, errorMsg: '', isInvalid: false },
-    });
+    }));
   };
   const handleTagsChange = (value) =>
     setFormData({
@@ -279,10 +279,10 @@ const Ask = () => {
     });
 
   const handleAnswerChange = (value: string) =>
-    setFormData({
-      ...formData,
+    setFormData((prev) => ({
+      ...prev,
       answer_content: { value, errorMsg: '', isInvalid: false },
-    });
+    }));
 
   const handleSummaryChange = (evt: React.ChangeEvent<HTMLInputElement>) =>
     setFormData({

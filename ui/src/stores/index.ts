@@ -33,7 +33,8 @@ import loginToContinueStore from './loginToContinue';
 import errorCodeStore from './errorCode';
 import sideNavStore from './sideNav';
 import commentReplyStore from './commentReply';
-import siteLealStore from './siteLegal';
+import siteSecurityStore from './siteSecurity';
+import aiControlStore from './aiControl';
 
 export {
   toastStore,
@@ -52,5 +53,6 @@ export {
   sideNavStore,
   commentReplyStore,
   writeSettingStore,
-  siteLealStore,
+  siteSecurityStore,
+  aiControlStore,
 };

@@ -46,6 +46,13 @@ const Index: FC = () => {
         enumNames: themeSetting?.theme_options?.map((_) => _.label),
         default: themeSetting?.theme_options?.[0]?.value,
       },
+      layout: {
+        type: 'string',
+        title: t('layout.label'),
+        enum: ['Full-width', 'Fixed-width'],
+        enumNames: [t('layout.full_width'), t('layout.fixed_width')],
+        default: themeSetting?.layout,
+      },
       color_scheme: {
         type: 'string',
         title: t('color_scheme.label'),
@@ -75,6 +82,9 @@ const Index: FC = () => {
       'ui:widget': 'select',
     },
     color_scheme: {
+      'ui:widget': 'select',
+    },
+    layout: {
       'ui:widget': 'select',
     },
     navbar_style: {
@@ -131,6 +141,7 @@ const Index: FC = () => {
     const reqParams: Type.AdminSettingsTheme = {
       theme: themeName,
       color_scheme: formData.color_scheme.value,
+      layout: formData.layout.value,
       theme_config: {
         [themeName]: {
           navbar_style: formData.navbar_style.value,
@@ -171,6 +182,7 @@ const Index: FC = () => {
           : DEFAULT_THEME_COLOR;
         formMeta.primary_color.value = themeConfig?.primary_color;
         formData.color_scheme.value = setting?.color_scheme || 'system';
+        formData.layout.value = setting?.layout || 'Full-width';
         setFormData({ ...formMeta });
       }
     });
@@ -193,13 +205,15 @@ const Index: FC = () => {
   return (
     <>
       <h3 className="mb-4">{t('page_title')}</h3>
-      <SchemaForm
-        schema={schema}
-        formData={formData}
-        onSubmit={onSubmit}
-        uiSchema={uiSchema}
-        onChange={handleOnChange}
-      />
+      <div className="max-w-748">
+        <SchemaForm
+          schema={schema}
+          formData={formData}
+          onSubmit={onSubmit}
+          uiSchema={uiSchema}
+          onChange={handleOnChange}
+        />
+      </div>
     </>
   );
 };

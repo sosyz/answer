@@ -33,7 +33,7 @@ import (
 	"github.com/apache/answer/internal/base/validator"
 	"github.com/apache/answer/internal/entity"
 	"github.com/apache/answer/internal/schema"
-	"github.com/apache/answer/internal/service/activity_queue"
+	"github.com/apache/answer/internal/service/activityqueue"
 	"github.com/apache/answer/internal/service/revision_common"
 	"github.com/apache/answer/internal/service/siteinfo_common"
 	"github.com/apache/answer/pkg/converter"
@@ -89,7 +89,7 @@ type TagCommonService struct {
 	tagRelRepo           TagRelRepo
 	tagRepo              TagRepo
 	siteInfoService      siteinfo_common.SiteInfoCommonService
-	activityQueueService activity_queue.ActivityQueueService
+	activityQueueService activityqueue.Service
 }
 
 // NewTagCommonService new tag service
@@ -99,7 +99,7 @@ func NewTagCommonService(
 	tagRepo TagRepo,
 	revisionService *revision_common.RevisionService,
 	siteInfoService siteinfo_common.SiteInfoCommonService,
-	activityQueueService activity_queue.ActivityQueueService,
+	activityQueueService activityqueue.Service,
 ) *TagCommonService {
 	return &TagCommonService{
 		tagCommonRepo:        tagCommonRepo,
@@ -270,7 +270,7 @@ func (ts *TagCommonService) GetTagListByNames(ctx context.Context, tagNames []st
 }
 
 func (ts *TagCommonService) ExistRecommend(ctx context.Context, tags []*schema.TagItem) (bool, error) {
-	taginfo, err := ts.siteInfoService.GetSiteWrite(ctx)
+	taginfo, err := ts.siteInfoService.GetSiteTag(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -295,7 +295,7 @@ func (ts *TagCommonService) ExistRecommend(ctx context.Context, tags []*schema.T
 }
 
 func (ts *TagCommonService) GetMinimumTags(ctx context.Context) (int, error) {
-	siteInfo, err := ts.siteInfoService.GetSiteWrite(ctx)
+	siteInfo, err := ts.siteInfoService.GetSiteQuestion(ctx)
 	if err != nil {
 		return 1, err
 	}
@@ -469,7 +469,7 @@ func (ts *TagCommonService) TagsFormatRecommendAndReserved(ctx context.Context, 
 	if len(tagList) == 0 {
 		return
 	}
-	tagConfig, err := ts.siteInfoService.GetSiteWrite(ctx)
+	tagConfig, err := ts.siteInfoService.GetSiteTag(ctx)
 	if err != nil {
 		log.Error(err)
 		return
@@ -485,7 +485,7 @@ func (ts *TagCommonService) tagFormatRecommendAndReserved(ctx context.Context, t
 	if tag == nil {
 		return
 	}
-	tagConfig, err := ts.siteInfoService.GetSiteWrite(ctx)
+	tagConfig, err := ts.siteInfoService.GetSiteTag(ctx)
 	if err != nil {
 		log.Error(err)
 		return
