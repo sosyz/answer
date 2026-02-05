@@ -174,10 +174,27 @@ func nextStdChunk(from []rune) (to, suffix []rune) {
 	case "a":
 		old = "a"
 	case "[":
-		if len(from) >= 4 && string(from[:4]) == "[at]" {
-			old = "[at]"
+		// treat anything inside [] as literal text, e.g. [at], [a las], [o]
+		end := -1
+		for i := 1; i < len(from); i++ {
+			if from[i] == ']' {
+				end = i
+				break
+			}
 		}
+		if end != -1 {
+			to = []rune(string(from[1:end]))
+			suffix = from[end+1:]
+			return
+		}
+		// no closing bracket, fall back to literal "["
+		old = "["
 	default:
+		old = s
+	}
+
+	if old == "" {
+		// safety: always consume at least one rune
 		old = s
 	}
 
