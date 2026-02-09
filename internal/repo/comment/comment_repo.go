@@ -31,6 +31,7 @@ import (
 	"github.com/apache/answer/internal/service/comment"
 	"github.com/apache/answer/internal/service/comment_common"
 	"github.com/apache/answer/internal/service/unique"
+	"github.com/apache/answer/pkg/uid"
 	"github.com/segmentfault/pacman/errors"
 )
 
@@ -107,6 +108,9 @@ func (cr *commentRepo) UpdateCommentStatus(ctx context.Context, commentID string
 func (cr *commentRepo) GetComment(ctx context.Context, commentID string) (
 	comment *entity.Comment, exist bool, err error) {
 	comment = &entity.Comment{}
+	if !uid.IsValidNumericID(commentID) {
+		return comment, false, nil
+	}
 	exist, err = cr.data.DB.Context(ctx).Where("status = ?", entity.CommentStatusAvailable).ID(commentID).Get(comment)
 	if err != nil {
 		err = errors.InternalServer(reason.DatabaseError).WithError(err).WithStack()
@@ -118,6 +122,9 @@ func (cr *commentRepo) GetComment(ctx context.Context, commentID string) (
 func (cr *commentRepo) GetCommentWithoutStatus(ctx context.Context, commentID string) (
 	comment *entity.Comment, exist bool, err error) {
 	comment = &entity.Comment{}
+	if !uid.IsValidNumericID(commentID) {
+		return comment, false, nil
+	}
 	exist, err = cr.data.DB.Context(ctx).ID(commentID).Get(comment)
 	if err != nil {
 		err = errors.InternalServer(reason.DatabaseError).WithError(err).WithStack()
