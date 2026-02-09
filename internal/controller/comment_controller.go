@@ -33,6 +33,7 @@ import (
 	"github.com/apache/answer/internal/service/comment"
 	"github.com/apache/answer/internal/service/permission"
 	"github.com/apache/answer/internal/service/rank"
+	"github.com/apache/answer/pkg/uid"
 	"github.com/gin-gonic/gin"
 	"github.com/segmentfault/pacman/errors"
 )
@@ -85,6 +86,7 @@ func (cc *CommentController) AddComment(ctx *gin.Context) {
 			cc.rateLimitMiddleware.DuplicateRequestClear(ctx, rejectKey)
 		}
 	}()
+	req.ObjectID = uid.DeShortID(req.ObjectID)
 	req.UserID = middleware.GetLoginUserIDFromContext(ctx)
 
 	canList, err := cc.rankService.CheckOperationPermissions(ctx, req.UserID, []string{
@@ -243,6 +245,8 @@ func (cc *CommentController) GetCommentWithPage(ctx *gin.Context) {
 	if handler.BindAndCheck(ctx, req) {
 		return
 	}
+	req.ObjectID = uid.DeShortID(req.ObjectID)
+	req.CommentID = uid.DeShortID(req.CommentID)
 	req.UserID = middleware.GetLoginUserIDFromContext(ctx)
 	canList, err := cc.rankService.CheckOperationPermissions(ctx, req.UserID, []string{
 		permission.CommentEdit,
