@@ -191,7 +191,7 @@ export interface UISchema {
  */
 export interface UIAction {
   url: string;
-  method?: 'get' | 'post' | 'put' | 'delete';
+  method?: 'get' | 'post' | 'put' | 'delete' | 'navigate';
   loading?: {
     text: string;
     state?: 'none' | 'pending' | 'completed';

@@ -82,6 +82,10 @@ const Index: FC<Props> = ({
     if (!action) {
       return;
     }
+    if (action.method === 'navigate') {
+      window.location.href = action.url;
+      return;
+    }
     setLoading(true);
     request
       .request({
