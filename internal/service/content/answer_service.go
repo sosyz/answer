@@ -43,6 +43,7 @@ import (
 	"github.com/apache/answer/internal/service/revision_common"
 	"github.com/apache/answer/internal/service/role"
 	usercommon "github.com/apache/answer/internal/service/user_common"
+	"github.com/apache/answer/internal/service/vector_sync"
 	"github.com/apache/answer/pkg/converter"
 	"github.com/apache/answer/pkg/htmltext"
 	"github.com/apache/answer/pkg/token"
@@ -70,6 +71,7 @@ type AnswerService struct {
 	activityQueueService             activityqueue.Service
 	reviewService                    *review.ReviewService
 	eventQueueService                eventqueue.Service
+	vectorSyncService                vector_sync.Service
 }
 
 func NewAnswerService(
@@ -90,6 +92,7 @@ func NewAnswerService(
 	activityQueueService activityqueue.Service,
 	reviewService *review.ReviewService,
 	eventQueueService eventqueue.Service,
+	vectorSyncService vector_sync.Service,
 ) *AnswerService {
 	return &AnswerService{
 		answerRepo:                       answerRepo,
@@ -109,6 +112,7 @@ func NewAnswerService(
 		activityQueueService:             activityQueueService,
 		reviewService:                    reviewService,
 		eventQueueService:                eventQueueService,
+		vectorSyncService:                vectorSyncService,
 	}
 }
 
@@ -192,6 +196,8 @@ func (as *AnswerService) RemoveAnswer(ctx context.Context, req *schema.RemoveAns
 	})
 	as.eventQueueService.Send(ctx, schema.NewEvent(constant.EventAnswerDelete, req.UserID).TID(answerInfo.ID).
 		AID(answerInfo.ID, answerInfo.UserID))
+	as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionDelete, ObjectType: vector_sync.ObjectTypeAnswer, ObjectID: answerInfo.ID})
+	as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeQuestion, ObjectID: answerInfo.QuestionID})
 	return
 }
 
@@ -239,6 +245,8 @@ func (as *AnswerService) RecoverAnswer(ctx context.Context, req *schema.RecoverA
 		OriginalObjectID: answerInfo.ID,
 		ActivityTypeKey:  constant.ActAnswerUndeleted,
 	})
+	as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeAnswer, ObjectID: answerInfo.ID})
+	as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeQuestion, ObjectID: answerInfo.QuestionID})
 	return nil
 }
 
@@ -249,6 +257,14 @@ func (as *AnswerService) Insert(ctx context.Context, req *schema.AnswerAddReq) (
 	}
 	if !exist {
 		return "", errors.BadRequest(reason.QuestionNotFound)
+	}
+	if err := (&schema.SimpleObjectInfo{
+		ObjectType:            constant.QuestionObjectType,
+		QuestionCreatorUserID: questionInfo.UserID,
+		QuestionStatus:        questionInfo.Status,
+		QuestionShow:          questionInfo.Show,
+	}).CheckVisibility(req.UserID, req.IsAdminModerator); err != nil {
+		return "", err
 	}
 	if questionInfo.Status == entity.QuestionStatusClosed || questionInfo.Status == entity.QuestionStatusDeleted {
 		err = errors.BadRequest(reason.AnswerCannotAddByClosedQuestion)
@@ -332,6 +348,10 @@ func (as *AnswerService) Insert(ctx context.Context, req *schema.AnswerAddReq) (
 	})
 	as.eventQueueService.Send(ctx, schema.NewEvent(constant.EventAnswerCreate, req.UserID).TID(insertData.ID).
 		AID(insertData.ID, insertData.UserID))
+	if insertData.Status == entity.AnswerStatusAvailable {
+		as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeAnswer, ObjectID: insertData.ID})
+		as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeQuestion, ObjectID: insertData.QuestionID})
+	}
 	return insertData.ID, nil
 }
 
@@ -425,6 +445,8 @@ func (as *AnswerService) Update(ctx context.Context, req *schema.AnswerUpdateReq
 		})
 		as.eventQueueService.Send(ctx, schema.NewEvent(constant.EventAnswerUpdate, req.UserID).TID(insertData.ID).
 			AID(insertData.ID, insertData.UserID))
+		as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeAnswer, ObjectID: insertData.ID})
+		as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeQuestion, ObjectID: insertData.QuestionID})
 	}
 
 	return insertData.ID, nil
@@ -457,7 +479,7 @@ func (as *AnswerService) AcceptAnswer(ctx context.Context, req *schema.AcceptAns
 		}
 
 		// check answer belong to question
-		if acceptedAnswerInfo.QuestionID != req.QuestionID {
+		if !sameObjectID(acceptedAnswerInfo.QuestionID, req.QuestionID) {
 			return errors.BadRequest(reason.AnswerNotFound)
 		}
 		acceptedAnswerInfo.ID = uid.DeShortID(acceptedAnswerInfo.ID)
@@ -489,7 +511,20 @@ func (as *AnswerService) AcceptAnswer(ctx context.Context, req *schema.AcceptAns
 	}
 
 	as.updateAnswerRank(ctx, req.UserID, questionInfo, acceptedAnswerInfo, oldAnswerInfo)
+	if acceptedAnswerInfo != nil {
+		as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeAnswer, ObjectID: acceptedAnswerInfo.ID})
+	}
+	if oldAnswerInfo != nil {
+		as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeAnswer, ObjectID: oldAnswerInfo.ID})
+	}
+	as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeQuestion, ObjectID: questionInfo.ID})
 	return nil
+}
+
+// sameObjectID reports whether two object ids refer to the same row,
+// regardless of whether each is in short-id or long-id form.
+func sameObjectID(a, b string) bool {
+	return uid.DeShortID(a) == uid.DeShortID(b)
 }
 
 func (as *AnswerService) updateAnswerRank(ctx context.Context, userID string,
@@ -512,10 +547,32 @@ func (as *AnswerService) updateAnswerRank(ctx context.Context, userID string,
 	}
 }
 
-func (as *AnswerService) Get(ctx context.Context, answerID, loginUserID string) (*schema.AnswerInfo, *schema.QuestionInfoResp, bool, error) {
+func (as *AnswerService) Get(ctx context.Context, answerID, loginUserID string, isAdminModerator bool) (*schema.AnswerInfo, *schema.QuestionInfoResp, bool, error) {
 	answerInfo, has, err := as.answerRepo.GetByID(ctx, answerID)
 	if err != nil {
 		return nil, nil, has, err
+	}
+	if !has {
+		return nil, nil, false, nil
+	}
+	question, exist, err := as.questionRepo.GetQuestion(ctx, answerInfo.QuestionID)
+	if err != nil {
+		return nil, nil, has, err
+	}
+	if !exist {
+		return nil, nil, false, errors.NotFound(reason.AnswerNotFound)
+	}
+
+	if (question.Status == entity.QuestionStatusDeleted ||
+		question.Status == entity.QuestionStatusPending ||
+		question.Show == entity.QuestionHide) &&
+		!isAdminModerator && question.UserID != loginUserID {
+		return nil, nil, false, errors.NotFound(reason.AnswerNotFound)
+	}
+	if (answerInfo.Status == entity.AnswerStatusDeleted ||
+		answerInfo.Status == entity.AnswerStatusPending) &&
+		!isAdminModerator && answerInfo.UserID != loginUserID {
+		return nil, nil, false, errors.NotFound(reason.AnswerNotFound)
 	}
 	info := as.ShowFormat(ctx, answerInfo)
 	// todo questionFunc
@@ -616,11 +673,32 @@ func (as *AnswerService) AdminSetAnswerStatus(ctx context.Context, req *schema.A
 			return err
 		}
 	}
+	switch setStatus {
+	case entity.AnswerStatusDeleted:
+		as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionDelete, ObjectType: vector_sync.ObjectTypeAnswer, ObjectID: answerInfo.ID})
+		as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeQuestion, ObjectID: answerInfo.QuestionID})
+	case entity.AnswerStatusAvailable:
+		as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeAnswer, ObjectID: answerInfo.ID})
+		as.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeQuestion, ObjectID: answerInfo.QuestionID})
+	}
 	return nil
 }
 
 func (as *AnswerService) SearchList(ctx context.Context, req *schema.AnswerListReq) ([]*schema.AnswerInfo, int64, error) {
 	list := make([]*schema.AnswerInfo, 0)
+	questionInfo, exist, err := as.questionRepo.GetQuestion(ctx, req.QuestionID)
+	if err != nil {
+		return list, 0, err
+	}
+	if !exist {
+		return list, 0, errors.NotFound(reason.QuestionNotFound)
+	}
+	if (questionInfo.Status == entity.QuestionStatusDeleted ||
+		questionInfo.Status == entity.QuestionStatusPending ||
+		questionInfo.Show == entity.QuestionHide) &&
+		!req.IsAdminModerator && questionInfo.UserID != req.UserID {
+		return list, 0, errors.NotFound(reason.QuestionNotFound)
+	}
 	dbSearch := entity.AnswerSearch{}
 	dbSearch.QuestionID = req.QuestionID
 	dbSearch.Page = req.Page

@@ -140,6 +140,12 @@ func formatPlugins(plugins []string) (formatted []*pluginInfo) {
 		info := &pluginInfo{}
 		plugin, info.Path, _ = strings.Cut(plugin, "=")
 		info.Name, info.Version, _ = strings.Cut(plugin, "@")
+		// Resolve local path to absolute since build runs in a temp directory
+		if len(info.Path) > 0 {
+			if absPath, err := filepath.Abs(info.Path); err == nil {
+				info.Path = absPath
+			}
+		}
 		formatted = append(formatted, info)
 	}
 	return formatted
@@ -185,7 +191,12 @@ func createMainGoFile(b *buildingMaterial) (err error) {
 	for _, p := range b.plugins {
 		// If user set a path, use it to replace the module with local path
 		if len(p.Path) > 0 {
-			replacement := fmt.Sprintf("%s@%s=%s", p.Name, p.Version, p.Path)
+			var replacement string
+			if len(p.Version) > 0 {
+				replacement = fmt.Sprintf("%s@%s=%s", p.Name, p.Version, p.Path)
+			} else {
+				replacement = fmt.Sprintf("%s=%s", p.Name, p.Path)
+			}
 			err = b.newExecCmd("go", "mod", "edit", "-replace", replacement).Run()
 		} else if len(p.Version) > 0 {
 			// If user specify a version, use it to get specific version of the module
@@ -200,9 +211,27 @@ func createMainGoFile(b *buildingMaterial) (err error) {
 
 // downloadGoModFile run go mod commands to download dependencies
 func downloadGoModFile(b *buildingMaterial) (err error) {
-	// If user specify a module replacement, use it. Otherwise, use the latest version.
-	if len(b.answerModuleReplacement) > 0 {
-		replacement := fmt.Sprintf("%s=%s", "github.com/apache/answer", b.answerModuleReplacement)
+	answerReplacement := b.answerModuleReplacement
+
+	// If no replacement specified and current binary is v2+, auto-determine replacement.
+	// This is needed because go mod tidy would otherwise resolve github.com/apache/answer
+	// to the latest v1.x version, causing v2+ features (e.g. AI/MCP) to disappear.
+	if len(answerReplacement) == 0 && b.originalAnswerInfo.Version != "" {
+		ver, verErr := semver.NewVersion(strings.TrimPrefix(b.originalAnswerInfo.Version, "v"))
+		if verErr == nil && ver.Major() >= 2 {
+			answerReplacement = fmt.Sprintf("github.com/apache/answer@%s", b.originalAnswerInfo.Version)
+		}
+	}
+
+	if len(answerReplacement) > 0 {
+		// For v2+ versioned module paths (e.g. github.com/apache/answer@v2.0.0),
+		// go mod tidy rejects the version because the module path lacks a /v2 suffix.
+		// Work around this by cloning the repo locally and using a local path replacement.
+		localPath, resolveErr := resolveAnswerModuleReplacement(answerReplacement, b.tmpDir)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		replacement := fmt.Sprintf("%s=%s", "github.com/apache/answer", localPath)
 		err = b.newExecCmd("go", "mod", "edit", "-replace", replacement).Run()
 		if err != nil {
 			return err
@@ -219,6 +248,56 @@ func downloadGoModFile(b *buildingMaterial) (err error) {
 		return err
 	}
 	return
+}
+
+// resolveAnswerModuleReplacement resolves the ANSWER_MODULE value to a usable local path or
+// remote replacement string. For v2+ versioned module paths (e.g. github.com/apache/answer@v2.0.0),
+// Go module system rejects the version because the module path has no /v2 suffix. In that case
+// the repository is cloned locally and the local path is returned instead.
+func resolveAnswerModuleReplacement(replacement, tmpDir string) (string, error) {
+	// Local paths can be used as-is.
+	if strings.HasPrefix(replacement, "/") || strings.HasPrefix(replacement, "./") || strings.HasPrefix(replacement, "../") {
+		return replacement, nil
+	}
+
+	// Parse module@version format.
+	moduleName, version, hasVersion := strings.Cut(replacement, "@")
+	if !hasVersion {
+		return replacement, nil
+	}
+
+	// Only handle v2+ versions on module paths without the /vN suffix.
+	ver, err := semver.StrictNewVersion(strings.TrimPrefix(version, "v"))
+	if err != nil || ver.Major() < 2 {
+		return replacement, nil
+	}
+	if strings.HasSuffix(moduleName, fmt.Sprintf("/v%d", ver.Major())) {
+		return replacement, nil
+	}
+
+	// Clone the repo to a local directory and return its path.
+	gitURL := "https://" + moduleName
+	tag := "v" + strings.TrimPrefix(version, "v")
+	localPath := filepath.Join(filepath.Dir(tmpDir), fmt.Sprintf("answer_src_%s", strings.ReplaceAll(version, ".", "_")))
+
+	if _, statErr := os.Stat(localPath); statErr == nil {
+		fmt.Printf("[build] using cached local clone at %s\n", localPath)
+		return localPath, nil
+	}
+
+	fmt.Printf("[build] v2+ module detected, cloning %s@%s to local path %s...\n", moduleName, version, localPath)
+	cloneCmd := exec.Command("git", "clone", "--depth=1", "--branch="+tag, gitURL, localPath)
+	cloneCmd.Stdout = os.Stdout
+	cloneCmd.Stderr = os.Stderr
+	if err = cloneCmd.Run(); err != nil {
+		return "", fmt.Errorf(
+			"failed to clone %s@%s: %w\nTip: set ANSWER_MODULE to a local checkout path instead, e.g. ANSWER_MODULE=/path/to/answer",
+			moduleName, version, err,
+		)
+	}
+
+	fmt.Printf("[build] successfully cloned to %s\n", localPath)
+	return localPath, nil
 }
 
 // movePluginToVendor move plugin to vendor dir
@@ -413,6 +492,13 @@ func copyDirEntries(sourceFs fs.FS, sourceDir, targetDir string, ignoreDir ...st
 	ignoreThisDir := func(path string) bool {
 		for _, s := range ignoreDir {
 			if strings.HasPrefix(path, s) {
+				return true
+			}
+			// Also ignore nested occurrences, e.g. src/plugins/foo/node_modules
+			if strings.Contains(path, string(filepath.Separator)+s) {
+				return true
+			}
+			if strings.Contains(path, "/"+s) {
 				return true
 			}
 		}

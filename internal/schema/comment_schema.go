@@ -44,7 +44,8 @@ type AddCommentReq struct {
 	CaptchaCode         string   `json:"captcha_code"`
 
 	// user id
-	UserID string `json:"-"`
+	UserID           string `json:"-"`
+	IsAdminModerator bool   `json:"-"`
 	// whether user can add it
 	CanAdd bool `json:"-"`
 	// whether user can edit it
@@ -150,7 +151,8 @@ type GetCommentWithPageReq struct {
 	// query condition
 	QueryCond string `validate:"omitempty,oneof=vote created_at" form:"query_cond"`
 	// user id
-	UserID string `json:"-"`
+	UserID           string `json:"-"`
+	IsAdminModerator bool   `json:"-"`
 	// whether user can edit it
 	CanEdit bool `json:"-"`
 	// whether user can delete it
@@ -162,7 +164,8 @@ type GetCommentReq struct {
 	// object id
 	ID string `validate:"required" form:"id"`
 	// user id
-	UserID string `json:"-"`
+	UserID           string `json:"-"`
+	IsAdminModerator bool   `json:"-"`
 	// whether user can edit it
 	CanEdit bool `json:"-"`
 	// whether user can delete it
@@ -230,7 +233,9 @@ type GetCommentPersonalWithPageReq struct {
 	// username
 	Username string `validate:"omitempty,gt=0,lte=100" form:"username"`
 	// user id
-	UserID string `json:"-"`
+	UserID           string `json:"-"`
+	LoginUserID      string `json:"-"`
+	IsAdminModerator bool   `json:"-"`
 }
 
 // GetCommentPersonalWithPageResp comment response

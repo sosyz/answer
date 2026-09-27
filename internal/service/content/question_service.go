@@ -20,6 +20,7 @@
 package content
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -55,6 +56,7 @@ import (
 	"github.com/apache/answer/internal/service/tag"
 	tagcommon "github.com/apache/answer/internal/service/tag_common"
 	usercommon "github.com/apache/answer/internal/service/user_common"
+	"github.com/apache/answer/internal/service/vector_sync"
 	"github.com/apache/answer/pkg/checker"
 	"github.com/apache/answer/pkg/converter"
 	"github.com/apache/answer/pkg/htmltext"
@@ -63,7 +65,6 @@ import (
 	"github.com/jinzhu/copier"
 	"github.com/segmentfault/pacman/errors"
 	"github.com/segmentfault/pacman/log"
-	"golang.org/x/net/context"
 )
 
 // QuestionRepo question repository
@@ -93,6 +94,7 @@ type QuestionService struct {
 	configService                    *config.ConfigService
 	eventQueueService                eventqueue.Service
 	reviewRepo                       review.ReviewRepo
+	vectorSyncService                vector_sync.Service
 }
 
 func NewQuestionService(
@@ -119,6 +121,7 @@ func NewQuestionService(
 	configService *config.ConfigService,
 	eventQueueService eventqueue.Service,
 	reviewRepo review.ReviewRepo,
+	vectorSyncService vector_sync.Service,
 ) *QuestionService {
 	return &QuestionService{
 		activityRepo:                     activityRepo,
@@ -144,6 +147,7 @@ func NewQuestionService(
 		configService:                    configService,
 		eventQueueService:                eventQueueService,
 		reviewRepo:                       reviewRepo,
+		vectorSyncService:                vectorSyncService,
 	}
 }
 
@@ -456,6 +460,9 @@ func (qs *QuestionService) AddQuestion(ctx context.Context, req *schema.Question
 	}
 	qs.eventQueueService.Send(ctx, schema.NewEvent(constant.EventQuestionCreate, req.UserID).TID(question.ID).
 		QID(question.ID, question.UserID))
+	if question.Status == entity.QuestionStatusAvailable {
+		qs.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeQuestion, ObjectID: question.ID})
+	}
 
 	questionInfo, err = qs.GetQuestion(ctx, question.ID, question.UserID, req.QuestionPermission)
 	return
@@ -652,6 +659,7 @@ func (qs *QuestionService) RemoveQuestion(ctx context.Context, req *schema.Remov
 	})
 	qs.eventQueueService.Send(ctx, schema.NewEvent(constant.EventQuestionDelete, req.UserID).TID(questionInfo.ID).
 		QID(questionInfo.ID, questionInfo.UserID))
+	qs.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionDelete, ObjectType: vector_sync.ObjectTypeQuestion, ObjectID: questionInfo.ID})
 	return nil
 }
 
@@ -783,6 +791,7 @@ func (qs *QuestionService) RecoverQuestion(ctx context.Context, req *schema.Ques
 		OriginalObjectID: questionInfo.ID,
 		ActivityTypeKey:  constant.ActQuestionUndeleted,
 	})
+	qs.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeQuestion, ObjectID: questionInfo.ID})
 	return nil
 }
 
@@ -1068,6 +1077,7 @@ func (qs *QuestionService) UpdateQuestion(ctx context.Context, req *schema.Quest
 		})
 		qs.eventQueueService.Send(ctx, schema.NewEvent(constant.EventQuestionUpdate, req.UserID).TID(question.ID).
 			QID(question.ID, question.UserID))
+		qs.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeQuestion, ObjectID: question.ID})
 	}
 
 	questionInfo, err = qs.GetQuestion(ctx, question.ID, question.UserID, req.QuestionPermission)
@@ -1081,10 +1091,8 @@ func (qs *QuestionService) GetQuestion(ctx context.Context, questionID, userID s
 	if err != nil {
 		return
 	}
-	// If the question is deleted or pending, only the administrator and the author can view it
-	if (question.Status == entity.QuestionStatusDeleted ||
-		question.Status == entity.QuestionStatusPending) && !per.CanReopen && question.UserID != userID {
-		return nil, errors.NotFound(reason.QuestionNotFound)
+	if err = checkQuestionVisibility(question, userID, per); err != nil {
+		return nil, err
 	}
 	if question.Status != entity.QuestionStatusClosed {
 		per.CanReopen = false
@@ -1129,6 +1137,19 @@ func (qs *QuestionService) GetQuestion(ctx context.Context, questionID, userID s
 	return question, nil
 }
 
+func checkQuestionVisibility(question *schema.QuestionInfoResp, userID string, per schema.QuestionPermission) error {
+	// Deleted and pending questions are visible only to their author or users who can reopen them.
+	if (question.Status == entity.QuestionStatusDeleted ||
+		question.Status == entity.QuestionStatusPending) && !per.CanReopen && question.UserID != userID {
+		return errors.NotFound(reason.QuestionNotFound)
+	}
+	// Hidden questions are visible only to their author or an administrator/moderator.
+	if question.Show == entity.QuestionHide && !per.IsAdminModerator && question.UserID != userID {
+		return errors.NotFound(reason.QuestionNotFound)
+	}
+	return nil
+}
+
 // GetQuestionAndAddPV get question one
 func (qs *QuestionService) GetQuestionAndAddPV(ctx context.Context, questionID, loginUserID string,
 	per schema.QuestionPermission) (
@@ -1140,7 +1161,11 @@ func (qs *QuestionService) GetQuestionAndAddPV(ctx context.Context, questionID, 
 	return qs.GetQuestion(ctx, questionID, loginUserID, per)
 }
 
-func (qs *QuestionService) InviteUserInfo(ctx context.Context, questionID string) (inviteList []*schema.UserBasicInfo, err error) {
+func (qs *QuestionService) InviteUserInfo(ctx context.Context, questionID, userID string,
+	per schema.QuestionPermission) (inviteList []*schema.UserBasicInfo, err error) {
+	if _, err = qs.GetQuestion(ctx, questionID, userID, per); err != nil {
+		return nil, err
+	}
 	return qs.questioncommon.InviteUserInfo(ctx, questionID)
 }
 
@@ -1207,6 +1232,7 @@ func (qs *QuestionService) PersonalAnswerPage(ctx context.Context, req *schema.P
 	cond.Page = req.Page
 	cond.PageSize = req.PageSize
 	cond.ShowPending = req.IsAdmin || req.LoginUserID == cond.UserID
+	cond.ShowHidden = req.IsAdmin || req.LoginUserID == cond.UserID
 	if req.OrderCond == "newest" {
 		cond.Order = entity.AnswerSearchOrderByTime
 	} else {
@@ -1359,7 +1385,7 @@ func (qs *QuestionService) SearchUserTopList(ctx context.Context, userName strin
 }
 
 // GetQuestionsByTitle get questions by title
-func (qs *QuestionService) GetQuestionsByTitle(ctx context.Context, title string) (
+func (qs *QuestionService) GetQuestionsByTitle(ctx context.Context, title, userID string, per schema.QuestionPermission) (
 	resp []*schema.QuestionBaseInfo, err error) {
 	resp = make([]*schema.QuestionBaseInfo, 0)
 	if len(title) == 0 {
@@ -1402,6 +1428,9 @@ func (qs *QuestionService) GetQuestionsByTitle(ctx context.Context, title string
 		}
 	}
 	for _, question := range questions {
+		if !canViewSimilarQuestion(question, userID, per) {
+			continue
+		}
 		item := &schema.QuestionBaseInfo{}
 		item.ID = question.ID
 		item.Title = question.Title
@@ -1420,6 +1449,17 @@ func (qs *QuestionService) GetQuestionsByTitle(ctx context.Context, title string
 		resp = append(resp, item)
 	}
 	return resp, nil
+}
+
+func canViewSimilarQuestion(question *entity.Question, userID string, per schema.QuestionPermission) bool {
+	if question == nil || question.Status == entity.QuestionStatusDeleted {
+		return false
+	}
+	return checkQuestionVisibility(&schema.QuestionInfoResp{
+		UserID: question.UserID,
+		Status: question.Status,
+		Show:   question.Show,
+	}, userID, per) == nil
 }
 
 // SimilarQuestion
@@ -1629,6 +1669,12 @@ func (qs *QuestionService) AdminSetQuestionStatus(ctx context.Context, req *sche
 		msg.ObjectType = constant.QuestionObjectType
 		qs.notificationQueueService.Send(ctx, msg)
 	}
+	switch setStatus {
+	case entity.QuestionStatusDeleted:
+		qs.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionDelete, ObjectType: vector_sync.ObjectTypeQuestion, ObjectID: questionInfo.ID})
+	case entity.QuestionStatusAvailable:
+		qs.vectorSyncService.Send(ctx, &vector_sync.Task{Action: vector_sync.ActionUpsert, ObjectType: vector_sync.ObjectTypeQuestion, ObjectID: questionInfo.ID})
+	}
 	return nil
 }
 
@@ -1729,7 +1775,7 @@ func (qs *QuestionService) GetQuestionLink(ctx context.Context, req *schema.GetQ
 		req.InDays = schema.HotInDays
 	}
 
-	questionList, total, err := qs.questionRepo.GetQuestionLink(ctx, req.Page, req.PageSize, req.QuestionID, req.OrderCond, req.InDays)
+	questionList, total, err := qs.questionRepo.GetQuestionLink(ctx, req.Page, req.PageSize, req.QuestionID, req.LoginUserID, req.IsAdminModerator, req.OrderCond, req.InDays)
 	if err != nil {
 		return nil, 0, err
 	}
